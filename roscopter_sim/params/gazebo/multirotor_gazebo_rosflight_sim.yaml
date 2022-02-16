@@ -46,7 +46,7 @@ rosflight_plugins: {
 
   # IMU
   imu: {
-    noise_on: true,
+    noise_on: false,
     topic: imu/data,
     rate: 250,
     gyro_bias_topic: imu/gyro_bias,
@@ -61,7 +61,7 @@ rosflight_plugins: {
 
   # Barometer
   barometer: {
-    noise_on: true,
+    noise_on: false,
     topic: baro/data,
     rate: 50.0,
     stdev: *baro_stdev
@@ -69,7 +69,7 @@ rosflight_plugins: {
 
   # Magnetometer
   magnetometer: {
-    noise_on: true,
+    noise_on: false,
     rate: 100.0,
     topic: mag/data,
     stdev: *mag_stdev,
@@ -84,7 +84,7 @@ rosflight_plugins: {
 
   # GPS
   gps: {
-    noise_on: true,
+    noise_on: false,
     rate: 10.0,
     topic: gps/data,
     north_stdev: 0.21,
@@ -107,6 +107,7 @@ rosflight_sim: {
   linear_mu: 0.2,
   angular_mu: 0.3,
   ground_effect: [-55.3516, 181.8265, -203.9874, 85.3735, -7.6619],
+  surface_effect: [0.44, 1.8],
   # Dynamics
   num_rotors: 4,
   rotor_positions: [ 0.1926,  0.230, -0.0762,

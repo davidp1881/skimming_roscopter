@@ -85,6 +85,10 @@ private:
     double d;
     double e;
   } ground_effect_;
+  struct SE_constants{
+    double ca;
+    double cb;
+  }surface_effect_;
   double mass_; // for static thrust offset when in altitude mode (kg)
 
   // Container for an Actuator
