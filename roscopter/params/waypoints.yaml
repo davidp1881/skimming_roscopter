@@ -3,11 +3,14 @@
 waypoint_manager: {
 
 waypoints:
-  [[-2, 3, -4, 0.5], # North, East, Down, Yaw (radians)
-  [-3, -4, -7, 1.0],
-  [3, 3, -2, 0.0]],
+  [[0, 0, -1, 0.0], # North, East, Down, Yaw (radians)
+  [1, 1, -1, 0.0],
+  [0, 0, -1, 0.0],
+  [0, 0, -.2, 0.0],
+  [1, 1, -.2, 0.0],
+  [0, 0, -.2, 0.0]],
 
-threshold: 0.1,
-cycle: True
+threshold: 0.05,
+cycle: true
 
 }

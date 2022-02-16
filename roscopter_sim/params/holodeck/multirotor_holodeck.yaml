@@ -6,6 +6,7 @@ mass: 2.856
 linear_mu: 0.2
 angular_mu: 0.3
 ground_effect: [-55.3516, 181.8265, -203.9874, 85.3735, -7.6619]
+surface_effect: [0.44, 1.8]
 
 # Dynamics
 num_rotors: 4

@@ -12,6 +12,7 @@
 #include <stdint.h>
 #include <dynamic_reconfigure/server.h>
 #include <roscopter/ControllerConfig.h>
+#include <eigen3/Eigen/Dense>
 
 namespace controller
 {

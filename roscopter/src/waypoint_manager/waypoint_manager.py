@@ -343,7 +343,7 @@ class WaypointManager():
                 #Print if we did not already print
                 if self.print_wp_reached:
                     idx = self.current_waypoint_index
-                    rospy.loginfo('[waypoint_manager] Reached waypoint {}'.format(idx))
+                    rospy.loginfo('[waypoint_manager] Reached waypoint {}/{}'.format(idx, len(self.waypoint_list)))
                 # stop iterating over waypoints if cycle==false and last waypoint reached
                 if not self.cyclical_path and self.current_waypoint_index == len(self.waypoint_list)-1:
                     self.no_command = True

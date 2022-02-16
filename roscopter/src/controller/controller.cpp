@@ -331,8 +331,8 @@ if(mode_flag == roscopter_msgs::Command::MODE_NPOS_EPOS_DVEL_YAW)
 
   if(mode_flag == roscopter_msgs::Command::MODE_NACC_EACC_DACC_YAWRATE)
   {
-    // Model inversion (m[ax;ay;az] = m[0;0;g] + R'[0;0;-T]
-    double total_acc_c = sqrt((1.0 - xc_.az) * (1.0 - xc_.az) +
+    // Old Model inversion (m[ax;ay;az] = m[0;0;g] + R'[0;0;-T]
+    /*double total_acc_c = sqrt((1.0 - xc_.az) * (1.0 - xc_.az) +
                               xc_.ax * xc_.ax + xc_.ay * xc_.ay);  // (in g's)
     if (total_acc_c > 0.001)
     {
@@ -349,6 +349,147 @@ if(mode_flag == roscopter_msgs::Command::MODE_NPOS_EPOS_DVEL_YAW)
     double cosp = cos(xhat_.phi);
     double cost = cos(xhat_.theta);
     xc_.throttle = (1.0 - xc_.az) * throttle_eq_ / cosp / cost;
+    */
+
+    // New Model inversion (Forces compared in V1 frame)
+
+    // Init useful variables
+    double m = 1.0;
+    double g = 9.81;
+    double rho = 997.0;
+    double R = 0.05;
+    double h_max = .15;
+    Eigen::Vector3d Cd(0.1, 0.1,0.01);
+
+    Eigen::Matrix<double, 4, 3> rotor_positions;
+    rotor_positions << 0.1907,  0.205, 0.0,
+                  -0.1907,  0.205, 0.0,
+                  -0.1907, -0.205, 0.0,
+                   0.1907, -0.205, 0.0;
+
+    Eigen::Matrix3d V1RB;
+    V1RB << sin(xhat_.theta), sin(xhat_.phi)*sin(xhat_.theta),-cos(xhat_.phi)*sin(xhat_.theta),
+                              0.0, cos(xhat_.phi), sin(xhat_.phi),
+                              sin(xhat_.theta), -cos(xhat_.theta)*sin(xhat_.phi),cos(xhat_.phi)*cos(xhat_.theta);
+    
+    // Calculate Gravity Force 
+    Eigen::Vector3d gravity(0.0, 0.0, m*g);
+    
+    // Calculate Inertial Command Force
+    Eigen::Vector3d inertail(m*g*xc_.ax, m*g*xc_.ay, m*g*xc_.az);
+    
+    // Calculate Hydrostatic Forces for each bouy
+    double V_tot = 0.0;
+    for (int i = 0; i < 4; i++){ 
+      // 1st find the state of bouy
+      Eigen::Vector3d r_fi_pi(0.0, 0.0, 0.3);
+      
+      Eigen::Vector3d r_pi_g; 
+      r_pi_g << rotor_positions(i,0), rotor_positions(i,1), rotor_positions(i,2);
+      
+      Eigen::Vector3d r_g_o(xhat_.pn, xhat_.pe,xhat_.pd); 
+
+      Eigen::Vector3d r_fi_g = r_pi_g + r_fi_pi;
+      Eigen::Vector3d r_fi_o = r_g_o + V1RB * r_fi_g;
+
+      // 2nd find height of bouy
+      double h = (r_fi_o[2] / V1RB(2,2));
+      double sat_h = saturate(h,h_max,0.0);
+
+      // 3rd find volume of displaced water
+      double V = M_PI * pow(R,2) *sat_h;
+
+      // 4th sum the dispalced volume accross all bouys 
+      V_tot += V;
+
+      //std::cout << "h " << sat_h << std::endl;
+      //std::cout << "Z " << xhat_.pd << std::endl;
+    }
+    // Finalize hydrostatic force
+    Eigen::Vector3d hydrostatic; 
+    hydrostatic << 0.0, 0.0, -rho*g*V_tot;
+
+    // Calculate Hydrodynamic Forces for each bouy
+    Eigen::Vector3d hydrodynamic(0.0, 0.0, 0.0);
+    for (int i = 0; i < 4; i++){ 
+      // 1st find the state of bouy
+      Eigen::Vector3d r_fi_pi(0.0, 0.0, 0.3);
+      
+      Eigen::Vector3d r_pi_g; 
+      r_pi_g << rotor_positions(i,0), rotor_positions(i,1), rotor_positions(i,2);
+      
+      Eigen::Vector3d r_g_o(xhat_.pn, xhat_.pe,xhat_.pd); 
+
+      Eigen::Vector3d r_fi_g = r_pi_g + r_fi_pi;
+      Eigen::Vector3d r_fi_o = r_g_o + V1RB * r_fi_g;
+
+      // 2nd find height of bouy
+      double h = (r_fi_o[2] / V1RB(2,2));
+      double sat_h = saturate(h,h_max,0.0);
+
+      // 3rd Find center of displaced water
+      Eigen::Vector3d r_ci_fi(0.0, 0.0, h/2);
+      Eigen::Vector3d r_ci_g = r_ci_fi + r_fi_g; 
+      Eigen::Vector3d r_ci_o = r_g_o + V1RB * r_ci_g;
+
+      // 4th find velocity of bouy
+      Eigen::Vector3d w(xhat_.p,xhat_.q,xhat_.r);
+      double sinp = sin(xhat_.phi);
+      double cosp = cos(xhat_.phi);
+      double sint = sin(xhat_.theta);
+      double cost = cos(xhat_.theta);
+      double pxdot = cost * xhat_.u + sinp * sint * xhat_.v + cosp * sint * xhat_.w;
+      double pydot = cosp * xhat_.v - sinp * xhat_.w;
+      double pddot = -sint * xhat_.u + sinp * cost * xhat_.v + cosp * cost * xhat_.w;
+      Eigen::Vector3d v_g_o(pxdot, pydot, pddot);
+      Eigen::Vector3d v_ci_o = v_g_o + w.cross(r_ci_g);
+
+      // 5th calculate hydrodynamic drag
+      double A = 2*M_PI*sat_h;
+      Eigen::Vector3d D_body;
+      D_body << 0.5*A*Cd(0)*pow(v_ci_o(0),2), 0.5*A*Cd(1)*pow(v_ci_o(1),2), 0.5*A*Cd(2)*pow(v_ci_o(2),2) ;
+
+      Eigen::Vector3d D_v1 = V1RB * D_body;
+      
+      // 6th sum hydrodynamic forces
+      hydrodynamic += D_v1;
+    }
+
+    // Sum forces
+    //Eigen::Vector3d T = gravity - inertail + hydrostatic + hydrodynamic;
+    Eigen::Vector3d T = gravity - inertail + hydrostatic;
+    //Eigen::Vector3d T = gravity - inertail;
+
+    double total_acc_c = sqrt(pow(T(0),2) + pow(T(1),2) + pow(T(2),2));  // (in g's)
+    
+    if (total_acc_c > 0.001)
+    {
+      xc_.phi =-1* asin(T(1) / total_acc_c);
+      xc_.theta =-1* -1.0*asin(T(0) / total_acc_c);
+    }
+    else
+    {
+      xc_.phi = 0;
+      xc_.theta = 0;
+    }
+
+    // Compute desired thrust based on current pose
+    double cosp = cos(xhat_.phi);
+    double cost = cos(xhat_.theta);
+    xc_.throttle = (T(2)/g) * throttle_eq_ / cosp / cost;
+
+    /*
+    std::cout << "Phi " << xc_.phi << std::endl;
+    std::cout << "Theta " << xc_.theta << std::endl;
+    std::cout << "Thottle " << T(2) / cosp / cost << std::endl;
+    std::cout << "Sum Forces " << T(0) << " " << T(1) << " " << T(2) << std::endl;
+    std::cout << "Gravity " << gravity(0) << " " << gravity(1) << " " << gravity(2) << std::endl;
+    std::cout << "inertial " << -inertail(0) << " " << -inertail(1) << " " << -inertail(2) << std::endl;
+    std::cout << "hydrostatic " << hydrostatic(0) << " " << hydrostatic(1) << " " << hydrostatic(2) << std::endl;
+    std::cout << "hydrodynamic " << hydrodynamic(0) << " " << hydrodynamic(1) << " " << hydrodynamic(2) << std::endl;
+    */
+
+
 
     mode_flag = rosflight_msgs::Command::MODE_ROLL_PITCH_YAWRATE_THROTTLE;
   }
@@ -361,13 +502,6 @@ if(mode_flag == roscopter_msgs::Command::MODE_NPOS_EPOS_DVEL_YAW)
     command_.x = saturate(xc_.phi, max_.roll, -max_.roll);
     command_.y = saturate(xc_.theta, max_.pitch, -max_.pitch);
     command_.z = saturate(xc_.r, max_.yaw_rate, -max_.yaw_rate);
-
-    if (-xhat_.pd < min_altitude_)
-    {
-      command_.x = 0.;
-      command_.y = 0.;
-      command_.z = 0.;
-    }
   }
 }
 
