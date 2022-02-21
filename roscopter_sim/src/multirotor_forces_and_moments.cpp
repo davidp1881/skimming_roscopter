@@ -275,18 +275,184 @@ void MultiRotorForcesAndMoments::UpdateForcesAndMoments()
   applied_forces_.n = sat((1 - alphan)*applied_forces_.n + alphan *desired_forces_.n, actuators_.n.max, -1.0*actuators_.n.max);
   applied_forces_.Fz = sat((1 - alphaF)*applied_forces_.Fz + alphaF *desired_forces_.Fz, actuators_.F.max, 0.0);
 
-  // calculate ground effect
-  double z = -pd;
-  double ground_effect = max(ground_effect_.a*z*z*z*z + ground_effect_.b*z*z*z + ground_effect_.c*z*z + ground_effect_.d*z + ground_effect_.e, 0);
+  bool skimming_physics = true;
+  if (skimming_physics){
+    // Init useful variables
+    double m = 3.69;
+    double g = 9.81;
+    double rho = 997.0;
+    double R = 0.05;
+    double r_prop = 0.1;
+    double h_max = .25;
+    double Ca = .44;
+    double Cb = 1.8;
+    Eigen::Vector3d Cd(0.1, 0.1,0.01);
 
-  // Apply other forces (wind) <- follows "Quadrotors and Accelerometers - State Estimation With an Improved Dynamic Model"
-  // By Rob Leishman et al. (Remember NED)
-  actual_forces_.Fx = -1.0*linear_mu_*ur;
-  actual_forces_.Fy = -1.0*linear_mu_*vr;
-  actual_forces_.Fz = -1.0*linear_mu_*wr - applied_forces_.Fz - ground_effect;
-  actual_forces_.l = -1.0*angular_mu_*p + applied_forces_.l;
-  actual_forces_.m = -1.0*angular_mu_*q + applied_forces_.m;
-  actual_forces_.n = -1.0*angular_mu_*r + applied_forces_.n;
+    Eigen::Matrix<double, 4, 3> rotor_positions;
+    rotor_positions << 0.1907,  0.205, 0.0,
+                  -0.1907,  0.205, 0.0,
+                  -0.1907, -0.205, 0.0,
+                   0.1907, -0.205, 0.0;
+
+    Eigen::Matrix3d V1RB;
+    V1RB << sin(theta), sin(phi)*sin(theta),-cos(phi)*sin(theta),
+                        0.0, cos(phi), sin(phi),
+                        sin(theta), -cos(theta)*sin(phi),cos(phi)*cos(theta);
+
+    // Calculate Gravity Force 
+    Eigen::Vector3d gravity(0.0, 0.0, m*g);
+
+    // Calculate Aerodynamic Drag
+    Eigen::Vector3d aerodrag_B(-1.0*linear_mu_*ur, -1.0*linear_mu_*vr, -1.0*linear_mu_*wr);
+    Eigen::Vector3d aerodrag = V1RB * aerodrag_B;
+    Eigen::Vector3d aerodrag_moment(-1.0*angular_mu_*p, -1.0*angular_mu_*q, -1.0*angular_mu_*r);
+    Eigen::Vector3d rotor_drag_moment(applied_forces_.l, applied_forces_.m, applied_forces_.n);
+
+    // Calculate Surface Effect
+    Eigen::Vector3d T_B(0, 0, - applied_forces_.Fz);
+    double SE = 0.0;
+    for (int i = 0; i < 4; i++){ 
+      // 1st find the state of bouy    
+      Eigen::Vector3d r_pi_g; 
+      r_pi_g << rotor_positions(i,0), rotor_positions(i,1), rotor_positions(i,2);
+
+      Eigen::Vector3d r_g_o(pn, pe,pd); 
+      Eigen::Vector3d r_pi_o = r_g_o + V1RB * r_pi_g;
+
+      // 2nd find height of rotor
+      double z = abs(r_pi_o[2] / V1RB(2,2));
+
+      // 3rd sum the surface effects 
+      SE += 1+Ca*exp(-Cb*z/r_prop);
+    }
+    //Eigen::Vector3d T = V1RB * (T_B*(SE/4));
+    Eigen::Vector3d T = V1RB * T_B;
+
+    // Calculate Hydrostatic Forces for each bouy
+    Eigen::Vector3d hydrostatic(0.0, 0.0, 0.0);
+    Eigen::Vector3d hydrostatic_moment(0.0, 0.0, 0.0);
+    for (int i = 0; i < 4; i++){ 
+      // 1st find the state of bouy
+      Eigen::Vector3d r_fi_pi(0.0, 0.0, 0.3);
+      Eigen::Vector3d r_pi_g; 
+      r_pi_g << rotor_positions(i,0), rotor_positions(i,1), rotor_positions(i,2);
+      Eigen::Vector3d r_g_o(pn, pe,pd); 
+      Eigen::Vector3d r_fi_g = r_pi_g + r_fi_pi;
+      Eigen::Vector3d r_fi_o = r_g_o + V1RB * r_fi_g;
+
+      // 2nd find height of bouy
+      double h = (r_fi_o[2] / V1RB(2,2));
+      double sat_h = sat(h,h_max,0.0);
+
+      // 3rd Define other points
+      Eigen::Vector3d r_ci_fi(0.0, 0.0, h/2);
+      Eigen::Vector3d r_ci_g = r_ci_fi + r_fi_g; 
+      Eigen::Vector3d r_ci_o = r_g_o + V1RB * r_ci_g;
+
+      // 4th find volume of displaced water
+      double V = M_PI * pow(R,2) *sat_h;
+
+      // 5th sum the dispalced volume accross all bouys 
+      Eigen::Vector3d hydrostatic_I(0.0, 0.0, -rho*g*V);
+      Eigen::Vector3d hydrostatic_B = V1RB.transpose() * hydrostatic_I;
+      hydrostatic += hydrostatic_I;
+      hydrostatic_moment += r_ci_g.cross(hydrostatic_B);
+    }
+
+    // Calculate Hydrodynamic Forces for each bouy
+    Eigen::Vector3d hydrodynamic(0.0, 0.0, 0.0);
+    Eigen::Vector3d hydrodynamic_moment(0.0, 0.0, 0.0);
+    for (int i = 0; i < 4; i++){ 
+      // 1st find the state of bouy
+      Eigen::Vector3d r_fi_pi(0.0, 0.0, 0.3);
+      Eigen::Vector3d r_pi_g; 
+      r_pi_g << rotor_positions(i,0), rotor_positions(i,1), rotor_positions(i,2);
+      Eigen::Vector3d r_g_o(pn, pe, pd); 
+      Eigen::Vector3d r_fi_g = r_pi_g + r_fi_pi;
+      Eigen::Vector3d r_fi_o = r_g_o + V1RB * r_fi_g;
+
+      // 2nd find height of bouy
+      double h = (r_fi_o[2] / V1RB(2,2));
+      double sat_h = sat(h,h_max,0.0);
+
+      // 3rd Find center of displaced water
+      Eigen::Vector3d r_ci_fi(0.0, 0.0, h/2);
+      Eigen::Vector3d r_ci_g = r_ci_fi + r_fi_g; 
+      Eigen::Vector3d r_ci_o = r_g_o + V1RB * r_ci_g;
+
+      // 4th find velocity of bouy
+      Eigen::Vector3d angular_rates(p,q,r);
+      double sinp = sin(phi);
+      double cosp = cos(phi);
+      double sint = sin(theta);
+      double cost = cos(theta);
+      double pxdot = cost * u + sinp * sint * v + cosp * sint * w;
+      double pydot = cosp * v - sinp * w;
+      double pddot = -sint * u + sinp * cost * v + cosp * cost * w;
+      Eigen::Vector3d v_g_o(pxdot, pydot, pddot);
+      Eigen::Vector3d v_ci_o = v_g_o + angular_rates.cross(r_ci_g);
+
+      // 5th calculate hydrodynamic drag
+      double A = 2*M_PI*sat_h;
+      Eigen::Vector3d D_body;
+      D_body << 0.5*A*Cd(0)*pow(v_ci_o(0),2), 0.5*A*Cd(1)*pow(v_ci_o(1),2), 0.5*A*Cd(2)*pow(v_ci_o(2),2) ;
+      Eigen::Vector3d D_v1 = V1RB * D_body;
+
+      // 6th sum hydrodynamic forces
+      hydrodynamic += D_v1;
+      hydrodynamic_moment += r_ci_g.cross(D_body);
+    }
+
+    // Sum forces (Note, gravity handled in gazebo, not in this script.)
+    Eigen::Vector3d sum_force =  T + hydrostatic + hydrodynamic + aerodrag;
+    //Eigen::Vector3d sum_force = T + aerodrag;
+    Eigen::Vector3d sum_force_B = V1RB.transpose() * sum_force;
+
+    // Sum Moments
+    Eigen::Vector3d sum_moments = aerodrag_moment + rotor_drag_moment + hydrostatic_moment + hydrodynamic_moment;
+    //Eigen::Vector3d sum_moments = aerodrag_moment + rotor_drag_moment;
+
+
+    actual_forces_.Fx = sum_force_B(0);
+    actual_forces_.Fy = sum_force_B(1);
+    actual_forces_.Fz = sum_force_B(2);
+    actual_forces_.l = sum_moments(0);
+    actual_forces_.m = sum_moments(1);
+    actual_forces_.n = sum_moments(2);
+
+    /*
+    std::cout << "Phi " << phi << std::endl;
+    std::cout << "Theta " << theta << std::endl;
+    std::cout << "Psi " << psi << std::endl;
+    std::cout << "Sum Forces " << sum_force(0) << " " << sum_force(1) << " " << sum_force(2) << std::endl;
+    std::cout << "Gravity " << gravity(0) << " " << gravity(1) << " " << gravity(2) << std::endl;
+    std::cout << "hydrostatic " << hydrostatic(0) << " " << hydrostatic(1) << " " << hydrostatic(2) << std::endl;
+    std::cout << "aerodrag " << aerodrag(0) << " " << aerodrag(1) << " " << aerodrag(2) << std::endl;
+    std::cout << "Thrust " << T(0) << " " << T(1) << " " << T(2) << std::endl;  
+    std::cout << "hydrostatic " << hydrostatic(0) << " " << hydrostatic(1) << " " << hydrostatic(2) << std::endl;
+    std::cout << "hydrodynamic " << hydrodynamic(0) << " " << hydrodynamic(1) << " " << hydrodynamic(2) << std::endl;
+    std::cout << "aerodrag " << aerodrag(0) << " " << aerodrag(1) << " " << aerodrag(2) << std::endl;
+    std::cout << "hydrostatic " << hydrostatic(0) << " " << hydrostatic(1) << " " << hydrostatic(2) << std::endl;
+  */
+  }
+  else{
+    // Apply other forces (wind) <- follows "Quadrotors and Accelerometers - State Estimation With an Improved Dynamic Model"
+    // By Rob Leishman et al. (Remember NED)
+    
+    // calculate ground effect
+    double z = -pd;
+    double ground_effect = max(ground_effect_.a*z*z*z*z + ground_effect_.b*z*z*z + ground_effect_.c*z*z + ground_effect_.d*z + ground_effect_.e, 0);
+
+    actual_forces_.Fx = -1.0*linear_mu_*ur;
+    actual_forces_.Fy = -1.0*linear_mu_*vr;
+    actual_forces_.Fz = -1.0*linear_mu_*wr - applied_forces_.Fz - ground_effect;
+    actual_forces_.l = -1.0*angular_mu_*p + applied_forces_.l;
+    actual_forces_.m = -1.0*angular_mu_*q + applied_forces_.m;
+    actual_forces_.n = -1.0*angular_mu_*r + applied_forces_.n;
+  }
+  
+
+
 
   // publish attitude like ROSflight
   rosflight_msgs::Attitude attitude_msg;

@@ -4,7 +4,7 @@
   <arg name="mav_name"              default="multirotor"/>
   <arg name="x"                     default="0"/>
   <arg name="y"                     default="0"/>
-  <arg name="z"                     default="0.1"/>
+  <arg name="z"                     default="0.5"/>
   <arg name="yaw"                   default="0"/>
   <arg name="color"                 default="White"/>
   <arg name="paused"                default="false"/>
