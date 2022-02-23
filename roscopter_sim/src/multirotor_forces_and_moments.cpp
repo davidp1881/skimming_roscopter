@@ -405,7 +405,7 @@ void MultiRotorForcesAndMoments::UpdateForcesAndMoments()
 
     // Sum forces (Note, gravity handled in gazebo, not in this script.)
     Eigen::Vector3d sum_force =  T + hydrostatic + hydrodynamic + aerodrag;
-    //Eigen::Vector3d sum_force = T + aerodrag;
+    //Eigen::Vector3d sum_force =  T + aerodrag;
     Eigen::Vector3d sum_force_B = V1RB.transpose() * sum_force;
 
     // Sum Moments
